@@ -1,0 +1,104 @@
+--- 
+- name: Install Java and net-tools
+  hosts: Droplet
+  tasks:
+    - name: Update apt repo and cache
+      apt: update_cache=yes force_apt_get=yes cache_valid_time=3600
+    - name: Install Java 8
+      apt: name=openjdk-8-jre-headless
+    - name: Install net-tools
+      apt: name=net-tools
+
+- name: Download And Unpack Nexus
+  hosts: Droplet
+  tasks:
+  - name: Download nexus
+    get_url:
+      url: https://download.sonatype.com/nexus/3/nexus-3.73.0-12-unix.tar.gz
+      dest: /opt/
+      timeout: 60
+    register: download_result
+  
+  - name: Untar the file
+    unarchive:
+     src: "{{ download_result.dest }}"
+     dest: /opt/
+     remote_src: yes
+    when: download_result.dest is defined  # Check if it exists
+
+  
+  - name: find the nexus folder
+    find:
+      path: /opt
+      pattern: "nexus-*"
+      file_type: directory
+    register: find_result
+  - debug: msg={{find_result}}
+  
+  - name: check if the file exist
+    stat: #checks for its existencce or retrieve file system
+      path: /opt/nexus
+    register: stat_result
+  - debug: msg={{stat_result}}
+
+ 
+  - name: Rename the nexus file
+    shell: mv {{find_result.files[0].path}}  /opt/nexus #since it is dictionary ,0 index for the first item
+    when: not stat_result.stat.exists #conditional not = no exist
+
+- name: Create nexus user to own nexus folders
+  hosts: Droplet
+  tasks:
+   - name: Ensure nexus group exist #first group then user
+     group:
+      name: nexus
+      state: present #checks if group is present
+   - name: Create a user nexus
+     user:
+      name: nexus
+      group: nexus
+   - name: make nexus the owner
+     file: 
+      path: /opt/nexus
+      state: directory
+      owner: nexus
+      group: nexus
+      recurse: yes #chown -R(recursive) : R is for ownership of a directory and all of its contents, including subdirectories and files
+   - name: make nexus the owner of sonatype
+     file: 
+      path: /opt/sonatype-work
+      state: directory
+      owner: nexus
+      group: nexus
+      recurse: yes
+
+- name: Start nexus with nexus User
+  hosts: Droplet
+  become: True
+  become_user: nexus
+  tasks:
+    - name: Set run_as_user nexus
+      #blockinfile:  #insert/update/remove/ the text - either this module
+      lineinfile: #ensures particular line using regex or replace existing
+       path: /opt/nexus/bin/nexus.rc
+       #block: | # | is for multi line {blocki in file }
+       regexp: '^#run_as_user=""' #the line to change
+       line: run_as_user="nexus" 
+       state: present
+    - name: Start Nexus
+      command: /opt/nexus/bin/nexus start
+
+- name: Verify nexus is running
+  hosts: Droplet
+  tasks:
+  - name: checking with ps command
+    shell: ps aux | grep nexus
+    register: app_status
+  - debug: msg={{app_status.stdout_lines}}
+  - name: wait one minute
+    pause: 
+     minutes: 1
+  - name: checking with netstat
+    shell: netstat -plnt
+    register: app_status2
+  - debug: msg={{app_status2.stdout_lines}}
